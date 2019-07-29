@@ -25,9 +25,9 @@ contract GambleChannel {
     }
 
     modifier deposit() {
-        if (players[true] != msg.sender && 
-            players[false] != msg.sender){ revert();}
-        deposits[msg.sender] += msg.value;
+        if (players[true] != tx.origin && 
+            players[false] != tx.origin){ revert();}
+        deposits[tx.origin] += msg.value;
         _;
     }
 
@@ -35,9 +35,9 @@ contract GambleChannel {
 
     event ChannelClosed();
 
-    function gambleChannel (address player2, uint betsize) deposit public payable  {
-        if (msg.sender == player2) {revert();}
-        players[true] = msg.sender;
+    function beginGambleChannel (address player2, uint betsize) deposit public payable  {
+        if (tx.origin == player2) {revert();} 
+        players[true] = tx.origin;
         players[false] = player2;
         Betsize = betsize;
         Finalized = false;
@@ -55,20 +55,16 @@ contract GambleChannel {
     }
         
     function checkpair(Bet memory curr, Bet memory prior) view private returns(bool) {
-        
+       
         if (!checksig(curr)) return false;
         if (!checksig(prior)) return false;
-
         
         if (curr.Bettor == prior.Bettor) return false;
-
         
         if (curr.Currhash != prior.Priorhash) return false;
 
-        
         if (curr.Priorhash != prior.Currhash) return false;
 
-        
         if (curr.Nonce != prior.Nonce + 1) return false;
 
         bool winner = generateRandomBit();
@@ -82,7 +78,7 @@ contract GambleChannel {
         if (curr.Balance0 != prior.Balance0 + falseChange) return false;
         if (curr.Balance1 != prior.Balance1 + trueChange) return false;
 
-        
+        //passed all checks
         return true;
     }
 
@@ -105,7 +101,6 @@ contract GambleChannel {
     function claim() public deposit payable{
         if (channelClosed()) {
             if (!Adjusted) {
-         
                 if (FinalBettor) {
                     deltas[players[true]] += int(Betsize);
                     deltas[players[false]] -= int(Betsize);
@@ -115,16 +110,61 @@ contract GambleChannel {
                 }
                 Adjusted = true;
             }
-            uint256 amount = deposits[msg.sender] + uint(deltas[msg.sender]);
+            uint256 amount = deposits[tx.origin] + uint(deltas[tx.origin]);
             if (amount > 0) {
-                deposits[msg.sender] = 0;
-                deltas[msg.sender] = 0;
-                if (!msg.sender.send(amount)) {revert();}
+                deposits[tx.origin] = 0;
+                deltas[tx.origin] = 0;
+                if (!tx.origin.send(amount)) {revert();}
             }
         }
     }
 
     function channelClosed() view private returns(bool) {
         return Finalized && block.number > ClosingBlock ;
+    }
+}
+
+contract Factory {
+    uint public currentGameInstance;
+    
+    mapping (uint => GambleChannel) public games;
+    event newInstance(GambleChannel cf);
+    
+    function deployGambleChannel() public payable {
+        currentGameInstance++;
+        GambleChannel cf = new GambleChannel();
+        games[currentGameInstance] = cf;
+        emit newInstance(games[currentGameInstance]);
+    }
+    
+    function getGameByID(uint _id) public view returns(GambleChannel){
+        return games[_id];
+    }    
+}
+
+contract Dashboard {
+    Factory gameFacoty;
+    
+    constructor(address _gameFactory) public {
+        gameFacoty = Factory(_gameFactory);
+    }
+    
+    function newChannel() public {
+        gameFacoty.deployGambleChannel();
+    }
+    
+    function beginGambleChannel(uint _id, address _player2, uint _betsize) public payable{
+        GambleChannel gc = GambleChannel(gameFacoty.getGameByID(_id));
+        gc.beginGambleChannel.value(msg.value)(_player2, _betsize);
+    }
+    
+    function finalize(uint _id, GambleChannel.Bet memory _currentBet, GambleChannel.Bet memory _priorBet) public payable {
+        GambleChannel gc = GambleChannel(gameFacoty.getGameByID(_id));
+        gc.finalize.value(msg.value)(_currentBet, _priorBet);
+    }
+    
+    function claim(uint _id) payable public {
+        GambleChannel gc = GambleChannel(gameFacoty.getGameByID(_id));
+        gc.claim.value(msg.value)();
     }
 }
